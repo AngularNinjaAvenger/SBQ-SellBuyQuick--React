@@ -2,6 +2,12 @@ const express = require("express");
 const mongoose = require("mongoose");
 const path = require("path");
 const multer = require("multer");
+const graphqlHttp = require("express-graphql");
+
+const auth = require("./middleware/auth");
+const schema = require("./graphql/schema");
+const resolver = require("./graphql/resolvers");
+const clearImage = require("./util/file");
 
 const app = express();
 const fileStorage = multer.diskStorage({
@@ -27,8 +33,6 @@ const fileFilter = (req, file, cb) => {
 };
 
 const bodyParser = require("body-parser");
-const feedRoutes = require("./routes/feed");
-const authRoutes = require("./routes/auth");
 
 app.use((req, res, next) => {
   res.header("Access-Control-Allow-Origin", "*");
@@ -37,6 +41,10 @@ app.use((req, res, next) => {
     "Access-Control-Allow-Headers",
     "Content-Type, Authorization, Content-Length, X-Requested-With"
   );
+  if (req.method === "OPTIONS") {
+    return res.status(200).send();
+  }
+
   next();
 });
 
@@ -48,9 +56,44 @@ app.use(
   }).single("image")
 );
 app.use("/images", express.static(path.join(__dirname, "images")));
-app.use("/feed", feedRoutes);
-app.use("/auth", authRoutes);
 
+app.use(auth);
+
+app.put("/post-image", (req, res, next) => {
+  if (!auth)
+    if (!req.file) {
+      return res.status(200).json({ message: "No file" });
+    }
+  if (req.body.oldPath) {
+    clearImage(req.body.oldPath);
+  }
+  return res.status(201).json({
+    message: "File stored",
+    filePath: req.file.path.replace("\\", "/")
+  });
+});
+
+app.use(
+  "/graphql",
+  graphqlHttp({
+    schema,
+    rootValue: resolver,
+    graphiql: true,
+    formatError(err) {
+      if (!err.originalError) {
+        return err;
+      }
+      const data = err.originalError.data;
+      const message = err.message || "An error occured";
+      const status = err.originalError.code || 500;
+      return {
+        message,
+        status,
+        data
+      };
+    }
+  })
+);
 app.use((error, req, res, next) => {
   console.log(error);
   console.log("Hehe has dele");
@@ -66,14 +109,10 @@ mongoose
     { useNewUrlParser: true }
   )
   .then(result => {
-    const server = app.listen(8080, err => {
+    app.listen(8080, err => {
       if (err) console.error(err);
       else {
         console.log("Server running on 8080");
-        io = require("./socket").init(server);
-        io.on("connection", socket => {
-          console.log("Client connected");
-        });
       }
     });
   })
